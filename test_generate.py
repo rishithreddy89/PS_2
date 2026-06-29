@@ -1,0 +1,11 @@
+from docx import Document
+document = Document()
+document.add_heading('Legal Analysis Document', 0)
+document.add_paragraph('This document contains crucial evidence for the case.')
+document.add_paragraph('On June 1st, the defendant breached the contract by failing to deliver the goods on time.')
+document.add_paragraph('The plaintiff suffered damages amounting to $50,000 as a direct result.')
+document.add_heading('Evidence', level=1)
+document.add_paragraph('1. Contract signed on Jan 1st.')
+document.add_paragraph('2. Email from defendant on May 30th stating they cannot deliver.')
+document.save('test.docx')
+print("Generated test.docx")

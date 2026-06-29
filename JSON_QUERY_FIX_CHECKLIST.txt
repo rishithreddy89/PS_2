@@ -1,0 +1,74 @@
+╔═══════════════════════════════════════════════════════════════╗
+║     SQLALCHEMY 2.X JSON QUERY FIX - VERIFICATION             ║
+╚═══════════════════════════════════════════════════════════════╝
+
+PROBLEM FIXED
+─────────────
+❌ Before: CaseDocument.meta_data['status'].astext == 'indexed'
+           AttributeError: 'astext' not supported in SQLAlchemy 2.x
+
+✅ After:  func.json_extract(CaseDocument.meta_data, '$.status') == 'indexed'
+           Works with SQLAlchemy 2.x + MySQL
+
+CHANGES MADE
+────────────
+
+1. Created CaseDocumentRepository
+   File: app/repositories/case_document.py
+   
+   Methods:
+     ✓ get_indexed_documents(case_id) → List[CaseDocument]
+     ✓ count_indexed_documents(case_id) → int
+     ✓ get_by_status(case_id, status) → List[CaseDocument]
+     ✓ get_by_case_id(case_id) → List[CaseDocument]
+
+2. Updated analysis.py
+   File: app/api/routers/analysis.py
+   
+   Changed:
+     ❌ Raw SQL with .astext
+     ✅ Repository method call: doc_repo.get_indexed_documents(case_id)
+
+3. Updated repositories/__init__.py
+   Added: CaseDocumentRepository exports
+
+VERIFICATION
+────────────
+
+✓ No .astext in codebase
+  Command: grep -r "\.astext" app/
+  Result: No matches found
+
+✓ Repository created with proper JSON queries
+  Using: func.json_extract() for MySQL JSON fields
+
+✓ SQLAlchemy 2.x compatible
+  Using: Standard SQLAlchemy 2.x func API
+
+TESTING
+───────
+
+Run: python3 test_json_query_fix.py
+
+Expected output:
+  ✓ Imports successful
+  ✓ Repository initialized
+  ✓ Test document created
+  ✓ JSON query executed successfully
+  ✓ Count query executed successfully
+  ✓ SQLAlchemy 2.x JSON queries work correctly
+
+READY TO USE
+────────────
+
+1. Start backend: ./run-backend.sh
+2. Create case
+3. Upload document (wait for "indexed" status)
+4. Click "Generate Analysis"
+5. Verify: POST /analyze returns 200
+6. Verify: No AttributeError
+7. Verify: Analysis proceeds
+
+STATUS: ✅ FIXED
+
+The analysis endpoint will now work correctly with indexed documents!

@@ -1,0 +1,568 @@
+# Phase 5 - Decision Intelligence Layer
+
+## Overview
+
+Phase 5 implements the core Decision Intelligence Layer responsible for generating explainable Next Best Actions (NBA). This is the heart of the hackathon - transforming retrieved knowledge, memory, and analysis into actionable recommendations.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                  DECISION INTELLIGENCE                   │
+└─────────────────────────────────────────────────────────┘
+                          │
+         ┌────────────────┼────────────────┐
+         ▼                ▼                ▼
+    ┌────────┐      ┌──────────┐    ┌──────────┐
+    │  NBA   │      │Evaluation│    │Reflection│
+    │ Agent  │ ───> │  Agent   │───>│  Agent   │
+    └────────┘      └──────────┘    └──────────┘
+         │                               │
+         ▼                               ▼
+    ┌──────────────┐              ┌──────────┐
+    │Explainability│              │  Human   │
+    │    Agent     │ ───────────> │  Review  │
+    └──────────────┘              └──────────┘
+```
+
+---
+
+## Agents
+
+### 1. NBA Agent (`nba_agent.py`)
+
+**Purpose**: Generate Top 3 Next Best Actions
+
+**Input**:
+- Execution Context
+- Retrieved Documents
+- Risk Summary
+- Evidence Summary
+- Timeline Summary
+- Memory (previous feedback)
+
+**Output**:
+```python
+{
+    "recommendations": [
+        {
+            "action": "specific action description",
+            "reasoning": "detailed reasoning",
+            "confidence_score": 0.85,
+            "priority": "urgent|high|medium|low",
+            "legal_basis": "relevant laws, statutes, precedents",
+            "supporting_evidence": ["evidence1", "evidence2"],
+            "expected_impact": "impact description",
+            "time_sensitivity": "immediate|1-week|2-weeks|1-month",
+            "dependencies": ["dependency1"],
+            "alternative_actions": [
+                {"action": "alt", "reasoning": "why", "confidence_score": 0.7}
+            ],
+            "rank": 1
+        }
+    ],
+    "overall_strategy": "strategic summary"
+}
+```
+
+**Key Features**:
+- Uses GPT-4 with structured output
+- Learns from previous feedback via memory
+- Avoids recommending previously rejected actions
+- Provides 1-2 alternative actions per recommendation
+- Confidence-calibrated scoring
+
+---
+
+### 2. Evaluation Agent (`evaluation_agent.py`)
+
+**Purpose**: Verify recommendation quality
+
+**Checks**:
+- ✓ Evidence support
+- ✓ Citation quality
+- ✓ Consistency
+- ✓ Confidence calibration
+- ✓ Missing evidence
+- ✓ Potential hallucinations
+
+**Output**:
+```python
+{
+    "evaluations": [
+        {
+            "recommendation_rank": 1,
+            "evidence_support_score": 0.85,
+            "citation_quality_score": 0.90,
+            "consistency_score": 0.88,
+            "confidence_calibration": "well_calibrated",
+            "evidence_check": {
+                "has_support": true,
+                "evidence_quality": "strong",
+                "missing_evidence": []
+            },
+            "potential_issues": [],
+            "overall_score": 0.87,
+            "passed": true
+        }
+    ],
+    "all_passed": true,
+    "overall_quality_score": 0.87
+}
+```
+
+**Quality Gates**:
+- Recommendations must score ≥ 0.70 to pass
+- Flags overconfident predictions
+- Identifies missing evidence
+
+---
+
+### 3. Reflection Agent (`reflection_agent.py`)
+
+**Purpose**: Self-improve recommendations before showing users
+
+**Reviews**:
+- Reasoning clarity
+- Confidence calibration
+- Priority appropriateness
+- Evidence sufficiency
+- Alternative actions quality
+
+**Output**:
+```python
+{
+    "reflections": [
+        {
+            "recommendation_rank": 1,
+            "needs_improvement": false,
+            "improvements": [
+                {
+                    "aspect": "reasoning",
+                    "current_value": "...",
+                    "suggested_value": "...",
+                    "justification": "..."
+                }
+            ],
+            "approval_status": "approved"
+        }
+    ],
+    "revised_recommendations": [...],  # Only if improvements made
+    "approved": true
+}
+```
+
+**Improvement Process**:
+1. Identifies gaps or weaknesses
+2. Suggests specific improvements
+3. Optionally rewrites recommendations
+4. Approves only when quality is sufficient
+
+---
+
+### 4. Explainability Agent (`explainability_agent.py`)
+
+**Purpose**: Create transparent, human-understandable explanations
+
+**Generates**:
+- Why this action?
+- Why now?
+- Supporting laws
+- Supporting precedents
+- Supporting evidence
+- Confidence explanation
+- Alternatives considered
+- Risk if ignored
+
+**Output**:
+```python
+{
+    "explanations": [
+        {
+            "why_this_action": "Core reasoning",
+            "why_now": "Timing rationale",
+            "supporting_laws": ["statute1", "regulation2"],
+            "supporting_precedents": ["case1 v case2"],
+            "supporting_evidence": ["fact1", "fact2"],
+            "confidence_explanation": "High confidence due to...",
+            "alternatives_considered": ["option1", "option2"],
+            "risk_if_ignored": "Consequences of inaction"
+        }
+    ]
+}
+```
+
+**Benefits**:
+- Full transparency
+- Audit trail
+- Legal compliance
+- Trust building
+
+---
+
+### 5. Human Review Agent (`human_review_agent.py`)
+
+**Purpose**: Prepare recommendations for lawyer approval
+
+**Features**:
+- Never executes automatically
+- Supports: Approve | Reject | Modify
+- Tracks all decisions
+- Stores feedback in memory
+- Learns from accepted/rejected recommendations
+
+**Workflow**:
+```
+Recommendation Generated
+         ↓
+Human Review Required
+         ↓
+    Lawyer Decision
+         ↓
+    ┌────┴────┐
+    ▼         ▼
+ Approve   Reject/Modify
+    ↓         ↓
+Execute  Store Feedback
+         ↓
+    Learn for Future
+```
+
+---
+
+## API Endpoints
+
+### POST `/api/v1/nba/analyze`
+
+Execute complete NBA analysis for a case.
+
+**Request**:
+```json
+{
+    "case_id": "case-uuid",
+    "query": "Analyze case and provide next best actions",
+    "include_memory": true
+}
+```
+
+**Response**:
+```json
+{
+    "case_id": "case-uuid",
+    "execution_id": "exec-uuid",
+    "recommendations": [...],
+    "evaluations": [...],
+    "explanations": [...],
+    "overall_quality": 0.87,
+    "requires_review": true,
+    "generated_at": "2024-01-01T12:00:00Z"
+}
+```
+
+**Execution Flow**:
+1. Retrieval Agent
+2. Evidence Agent
+3. Timeline Agent
+4. Risk Agent
+5. **NBA Agent**
+6. **Evaluation Agent**
+7. **Reflection Agent**
+8. **Explainability Agent**
+9. **Human Review Agent**
+
+---
+
+### GET `/api/v1/nba/recommendations/{case_id}`
+
+Get all recommendations for a case.
+
+**Response**:
+```json
+{
+    "case_id": "case-uuid",
+    "recommendations": [
+        {
+            "id": "rec-uuid",
+            "action": "File motion to dismiss",
+            "description": "...",
+            "reasoning": "...",
+            "confidence_score": 0.85,
+            "priority": "urgent",
+            "status": "pending_review",
+            "created_at": "2024-01-01T12:00:00Z"
+        }
+    ]
+}
+```
+
+---
+
+### GET `/api/v1/nba/explanations/{case_id}`
+
+Get explanations for case recommendations.
+
+**Response**:
+```json
+{
+    "case_id": "case-uuid",
+    "explanations": [
+        {
+            "recommendation_id": "rec-uuid",
+            "action": "File motion to dismiss",
+            "legal_basis": "Rule 12(b)(1) - Lack of jurisdiction",
+            "supporting_evidence": ["evidence1", "evidence2"],
+            "expected_impact": "Case dismissed with prejudice",
+            "confidence_explanation": "High confidence due to..."
+        }
+    ]
+}
+```
+
+---
+
+### POST `/api/v1/nba/feedback`
+
+Submit human feedback on a recommendation.
+
+**Request**:
+```json
+{
+    "recommendation_id": "rec-uuid",
+    "user_id": "user-uuid",
+    "decision": "approved|rejected|modified",
+    "rating": 5,
+    "comments": "Excellent recommendation",
+    "modifications": {
+        "action": "Modified action text"
+    }
+}
+```
+
+**Response**:
+```json
+{
+    "success": true,
+    "feedback_id": "feedback-uuid",
+    "message": "Feedback recorded and will influence future recommendations"
+}
+```
+
+**Learning Process**:
+- Approved actions → increase similar patterns
+- Rejected actions → avoid in future
+- Modified actions → learn preferred style
+- Ratings → confidence calibration
+
+---
+
+### POST `/api/v1/nba/review`
+
+Prepare recommendations for human review.
+
+**Response**:
+```json
+{
+    "case_id": "case-uuid",
+    "review_items": [
+        {
+            "recommendation_id": "rec-uuid",
+            "action": "File motion",
+            "reasoning": "...",
+            "confidence_score": 0.85,
+            "priority": "urgent",
+            "created_at": "2024-01-01T12:00:00Z"
+        }
+    ],
+    "total_pending": 3,
+    "requires_approval": true
+}
+```
+
+---
+
+## Memory Integration
+
+### Learning from Feedback
+
+```python
+# Previous feedback is automatically included in NBA generation
+feedback_history = [
+    {
+        "action_taken": "rejected",
+        "rating": 1,
+        "comments": "Too aggressive, client wants settlement",
+        "recommendation": "File lawsuit immediately"
+    }
+]
+
+# NBA Agent learns:
+# - Avoid aggressive actions for this case
+# - Prefer settlement-focused recommendations
+# - Adjust confidence scores accordingly
+```
+
+### Memory Types Used
+
+1. **Feedback Memory** - Historical decisions
+2. **Case Memory** - Case-specific context
+3. **Conversation Memory** - Dialogue history
+4. **Long-term Memory** - Pattern learning
+
+---
+
+## Testing
+
+Run Phase 5 tests:
+```bash
+./verify-phase5.sh
+```
+
+Or manually:
+```bash
+poetry run pytest tests/test_phase5.py -v
+```
+
+**Test Coverage**:
+- NBA Agent execution
+- Evaluation quality checks
+- Reflection improvements
+- Explainability generation
+- Human review preparation
+- Schema validation
+- Full workflow integration
+
+---
+
+## Quick Start
+
+```bash
+# 1. Set OpenAI API key
+export OPENAI_API_KEY=your-key
+
+# 2. Run Phase 5 demo
+./quick-start-phase5.sh
+```
+
+This will:
+1. Start the API server
+2. Create a test case
+3. Run full NBA analysis
+4. Display recommendations
+5. Show explanations
+
+---
+
+## Success Criteria
+
+✅ **All Implemented**:
+
+- [x] Top 3 recommendations generated
+- [x] Explainable AI working
+- [x] Reflection implemented
+- [x] Evaluation implemented
+- [x] Human Review implemented
+- [x] Feedback influences future recommendations
+- [x] Recommendations are fully evidence-backed
+- [x] Structured JSON output
+- [x] API endpoints functional
+- [x] Tests passing
+- [x] Memory integration working
+
+---
+
+## Key Differentiators
+
+### 1. **Self-Evaluation & Reflection**
+Most AI systems generate recommendations directly. LexMind AI:
+- Evaluates its own outputs
+- Reflects and improves before showing users
+- Ensures quality at every step
+
+### 2. **Explainable AI**
+Every recommendation includes:
+- Why this action?
+- Why now?
+- Legal basis
+- Evidence support
+- Alternatives considered
+
+### 3. **Human-in-the-Loop**
+- Never executes automatically
+- Requires lawyer approval
+- Learns from decisions
+- Adapts to preferences
+
+### 4. **Memory-Driven Learning**
+- Remembers past feedback
+- Avoids repeated mistakes
+- Improves over time
+- Case-specific adaptation
+
+---
+
+## Example Output
+
+```json
+{
+  "recommendations": [
+    {
+      "rank": 1,
+      "action": "File Motion to Compel Discovery",
+      "reasoning": "Opposing counsel has failed to respond to discovery requests for 45 days, exceeding the 30-day deadline under FRCP 33(b)(2). This delay is preventing case preparation and approaching trial date.",
+      "confidence_score": 0.92,
+      "priority": "urgent",
+      "legal_basis": "Federal Rules of Civil Procedure Rule 37(a)(3)(B) - Motion to Compel Discovery",
+      "supporting_evidence": [
+        "Discovery requests sent 2024-01-15",
+        "No response received as of 2024-03-01",
+        "Trial scheduled for 2024-06-15"
+      ],
+      "expected_impact": "Court order compelling responses within 14 days, potential cost sanctions against opposing party",
+      "time_sensitivity": "immediate",
+      "dependencies": [],
+      "alternative_actions": [
+        {
+          "action": "Send follow-up demand letter",
+          "reasoning": "Less adversarial approach, may preserve working relationship",
+          "confidence_score": 0.65
+        }
+      ]
+    }
+  ],
+  "evaluation": {
+    "overall_score": 0.89,
+    "evidence_support": "strong",
+    "passed": true
+  },
+  "explanation": {
+    "why_this_action": "Discovery responses are essential for case preparation and opposing counsel is in clear violation of procedural rules",
+    "why_now": "45-day delay is unreasonable and approaching trial date creates urgency",
+    "supporting_laws": ["FRCP 37(a)(3)(B)", "FRCP 33(b)(2)"],
+    "confidence_explanation": "High confidence due to clear rule violation, documented delay, and established case law",
+    "risk_if_ignored": "Insufficient time for case preparation, potential motion to continue trial, weak position at settlement"
+  }
+}
+```
+
+---
+
+## Future Enhancements
+
+- [ ] Multi-domain support (Healthcare, Finance, Insurance)
+- [ ] Real-time recommendation updates
+- [ ] Collaborative filtering across cases
+- [ ] Confidence calibration via A/B testing
+- [ ] Advanced reflection with chain-of-thought
+- [ ] Integration with legal research APIs
+
+---
+
+## Contact & Support
+
+For questions about Phase 5:
+- Review code in `app/agents/nba_agent.py`
+- Check API docs at `/docs`
+- Run verification script
+- See test examples in `tests/test_phase5.py`

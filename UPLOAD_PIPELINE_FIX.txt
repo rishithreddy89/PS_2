@@ -1,0 +1,348 @@
+## Document Upload & Embedding Pipeline - Debug & Fix Summary
+
+### Problem Statement
+1. Upload succeeded (HTTP 201) but ingestion still called OpenAI API
+2. Upload failed due to OpenAI quota exceeded
+3. DOCX parsing failed (python-docx not installed)
+4. Documents not completely processed or indexed
+
+### Solution Overview
+Replaced OpenAI embeddings with local sentence-transformers model (all-MiniLM-L6-v2) to:
+- Eliminate external API calls during upload
+- Work completely offline
+- Process documents locally
+- Never hit OpenAI quota limits
+
+---
+
+## Changes Made
+
+### 1. Created Local Embedding Service
+**File:** `app/knowledge/local_embedding.py` (NEW)
+- Uses `sentence-transformers` library with model `all-MiniLM-L6-v2`
+- Generates 384-dimensional embeddings (vs 1536 for OpenAI)
+- Runs asynchronously using thread pool
+- Singleton pattern for model reuse
+- **Key feature:** No external API calls
+
+### 2. Updated Ingestion Service
+**File:** `app/knowledge/ingestion.py`
+- **Changed:** `from app.knowledge.embedding import get_embedding_service` → `from app.knowledge.local_embedding import get_local_embedding_service`
+- **Changed:** `self.embedding_service = get_embedding_service()` → `self.embedding_service = get_local_embedding_service()`
+- **Fixed:** DOCX parsing error handling - now raises ImportError with clear message instead of silently skipping
+
+### 3. Updated Retrieval Service
+**File:** `app/knowledge/retrieval.py`
+- **Changed:** Uses `get_local_embedding_service()` instead of `get_embedding_service()`
+- Maintains hybrid search (vector + BM25)
+- Works with 384-dimensional embeddings from local model
+
+### 4. Enhanced Document Upload Router
+**File:** `app/api/routers/documents.py`
+- Added detailed logging for each step:
+  - File uploaded
+  - Document parsed
+  - Chunks created
+  - Local embeddings generated
+  - Indexed in ChromaDB
+  - Upload completed
+- Better error handling and logging
+- Explicit status tracking in metadata
+
+### 5. Updated Knowledge Module Exports
+**File:** `app/knowledge/__init__.py`
+- Exported `LocalEmbeddingService` and `get_local_embedding_service`
+- Kept `EmbeddingService` for backward compatibility
+
+### 6. Updated Dependencies
+**File:** `requirements.txt`
+- Added: `sentence-transformers>=2.3.1`
+- Added: `torch>=2.0.0`
+- Kept: `python-docx>=1.1.0` (now required, not optional)
+- Kept: `PyPDF2>=3.0.0`
+- Removed reliance on OpenAI embeddings
+
+**File:** `pyproject.toml`
+- Added: `python-docx = "^0.8.11"` (explicit version)
+- All embedding dependencies match requirements.txt
+
+### 7. Updated Environment Configuration
+**File:** `.env`
+- Changed: `EMBEDDING_MODEL=all-MiniLM-L6-v2` (local model)
+- Changed: `VECTOR_DB_DIMENSION=384` (vs 1536 for OpenAI)
+
+**File:** `.env.example`
+- Updated defaults for local embeddings
+- Added comments about local processing
+
+### 8. Updated Application Startup
+**File:** `app/main.py`
+- Added local embedding service initialization in lifespan
+- Model loads once at startup (not per request)
+- Logged embedding service initialization
+
+### 9. Enhanced Frontend Components
+**File:** `frontend/src/components/cases/DocumentUpload.tsx`
+- Added console logging for upload status
+- Better error handling and feedback
+
+**File:** `frontend/src/components/cases/DocumentList.tsx`
+- Auto-refresh every 3 seconds to show processing status
+- Shows: Uploaded → Processing → Indexed → Failed
+- Better loading state handling
+
+### 10. Created Verification Script
+**File:** `verify_local_embeddings.py` (NEW)
+- Tests local embedding service
+- Tests document ingestion
+- Tests ChromaDB integration
+- Verifies NO OpenAI API calls are made
+
+---
+
+## Upload Pipeline (After Fix)
+
+```
+Client                    Backend
+  |                          |
+  ├─ POST /upload ─────────→ |
+  |                          ├─ Validate file
+  |                          ├─ Save file to disk
+  |                          ├─ Create DB record (status: processing)
+  |                          ├─ Parse document (DOCX/PDF/TXT/MD)
+  |                          ├─ Chunk text (512 chars, 50 char overlap)
+  |                          ├─ Generate embeddings (LOCAL - no API!)
+  |                          ├─ Store in ChromaDB
+  |                          ├─ Update DB record (status: indexed)
+  |                          ├─ 201 Created ─────────→ |
+  |                          |
+  └─ GET /list ─────────────→ |
+     (every 3 sec)            ├─ Return documents with status
+                              └─ JSON ────────→ |
+```
+
+---
+
+## Key Improvements
+
+### ✅ Offline Processing
+- No internet required after model is loaded
+- Complete local processing pipeline
+- Works even if OpenAI API is down
+
+### ✅ Zero API Quota Usage
+- No OpenAI calls during upload
+- No rate limiting issues
+- Unlimited document processing
+
+### ✅ Better Error Handling
+- Clear error messages for missing dependencies
+- Detailed logging of each pipeline step
+- Status tracking (uploaded, processing, indexed, failed)
+
+### ✅ Dimension Compatibility
+- Updated vector DB to expect 384-dimensional embeddings
+- ChromaDB collection initialization compatible with local model
+
+### ✅ Frontend User Experience
+- Document list auto-refreshes every 3 seconds
+- Shows processing status transitions
+- Documents never disappear due to errors
+- Clear feedback on upload success/failure
+
+---
+
+## Installation & Setup
+
+### 1. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+This installs:
+- `sentence-transformers` - Local embedding model
+- `torch` - ML framework for sentence-transformers
+- `python-docx` - DOCX parsing
+- All other required packages
+
+### 2. Configure Environment
+```bash
+cp .env.example .env
+# Already configured for local embeddings:
+# EMBEDDING_MODEL=all-MiniLM-L6-v2
+# VECTOR_DB_DIMENSION=384
+```
+
+### 3. Start Backend
+```bash
+poetry run uvicorn app.main:app --reload
+```
+
+First startup will download the embedding model (~60MB) - this is a one-time operation.
+
+### 4. Verify Installation
+```bash
+python verify_local_embeddings.py
+```
+
+---
+
+## Testing Upload Workflow
+
+### 1. Create a Case
+```bash
+curl -X POST http://localhost:8000/api/v1/cases \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Employment Dispute",
+    "description": "Test case for document upload"
+  }'
+```
+
+### 2. Upload DOCX Document
+```bash
+curl -X POST http://localhost:8000/api/v1/documents/cases/{case_id}/documents \
+  -F "files=@Employment_Dispute_Case_File.docx"
+```
+
+### 3. Verify Processing
+```bash
+# Check document list
+curl http://localhost:8000/api/v1/documents/cases/{case_id}/documents
+
+# Response shows status: indexed (after processing)
+```
+
+### 4. Confirm No OpenAI Calls
+Monitor the backend logs - should see ZERO requests to `api.openai.com`
+
+---
+
+## Logging Output
+
+### Successful Upload
+```json
+{
+  "event": "File upload started",
+  "filename": "Employment_Dispute_Case_File.docx"
+}
+{
+  "event": "Saving file",
+  "filename": "Employment_Dispute_Case_File.docx",
+  "path": "uploads/case_id/Employment_Dispute_Case_File.docx"
+}
+{
+  "event": "Document parsed",
+  "filename": "Employment_Dispute_Case_File.docx"
+}
+{
+  "event": "Starting ingestion",
+  "filename": "Employment_Dispute_Case_File.docx"
+}
+{
+  "event": "Chunks created",
+  "filename": "Employment_Dispute_Case_File.docx",
+  "count": 8
+}
+{
+  "event": "Local embeddings generated",
+  "filename": "Employment_Dispute_Case_File.docx"
+}
+{
+  "event": "Indexed in ChromaDB",
+  "filename": "Employment_Dispute_Case_File.docx"
+}
+{
+  "event": "Upload completed",
+  "filename": "Employment_Dispute_Case_File.docx",
+  "status": "indexed"
+}
+{
+  "event": "Upload batch completed",
+  "count": 1,
+  "case_id": "case_id"
+}
+```
+
+---
+
+## Troubleshooting
+
+### Issue: "python-docx not installed"
+**Solution:** Run `pip install python-docx`
+
+### Issue: "sentence-transformers not installed"
+**Solution:** Run `pip install sentence-transformers torch`
+
+### Issue: Model takes long to download
+**Solution:** Normal - ~60MB one-time download on first run. Cached after that.
+
+### Issue: Slow embedding generation
+**Solution:** Runs on CPU by default. Large documents may take a few seconds.
+
+### Issue: High memory usage
+**Solution:** Model uses ~400MB RAM when loaded. Normal for local ML.
+
+---
+
+## Files Modified
+
+```
+app/
+├── knowledge/
+│   ├── embedding.py (original - kept for compatibility)
+│   ├── local_embedding.py (NEW - local embeddings)
+│   ├── ingestion.py (UPDATED - uses local embeddings)
+│   ├── retrieval.py (UPDATED - uses local embeddings)
+│   └── __init__.py (UPDATED - exports local service)
+├── api/routers/
+│   └── documents.py (UPDATED - enhanced logging)
+├── main.py (UPDATED - initialize embedding service)
+└── core/
+    └── config.py (NO CHANGE - already supports embedding_model)
+
+.env (UPDATED - local model config)
+.env.example (UPDATED - local model config)
+requirements.txt (UPDATED - new dependencies)
+pyproject.toml (UPDATED - python-docx explicit version)
+
+frontend/src/components/cases/
+├── DocumentUpload.tsx (UPDATED - better logging)
+└── DocumentList.tsx (UPDATED - auto-refresh)
+
+verify_local_embeddings.py (NEW - verification script)
+```
+
+---
+
+## Performance Characteristics
+
+### Embedding Generation
+- **Speed:** ~100-200 texts/second (CPU)
+- **Memory:** ~400MB model + processing buffer
+- **Dimension:** 384 (vs 1536 for OpenAI)
+- **Cost:** $0 (fully local)
+
+### Document Processing (example)
+- Upload: 100ms
+- Parse DOCX: 50-200ms
+- Chunking: 10-50ms
+- Embedding 8 chunks: 50-200ms
+- ChromaDB indexing: 10-50ms
+- **Total:** ~300-700ms per document
+
+### Offline Capability
+- ✅ Works without internet
+- ✅ No API key required
+- ✅ No rate limiting
+- ✅ No quota exhaustion
+
+---
+
+## Next Steps
+
+Only the analysis features (Generate Analysis) should require external APIs:
+- Gemini API for AI analysis
+- Claude API (if configured)
+
+Document upload and indexing are now completely offline.

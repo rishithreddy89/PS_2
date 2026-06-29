@@ -1,0 +1,58 @@
+version: '3.9'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: lexmind_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: lexmind_db
+      MYSQL_USER: lexmind
+      MYSQL_PASSWORD: lexmind_password
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    networks:
+      - lexmind_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lexmind_backend
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=mysql+aiomysql://lexmind:lexmind_password@mysql:3306/lexmind_db
+      - SECRET_KEY=your-secret-key-here-change-in-production-minimum-32-characters-long
+    volumes:
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - lexmind_network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  lexmind_network:
+    driver: bridge

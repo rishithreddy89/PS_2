@@ -1,0 +1,290 @@
+## Migration Guide: OpenAI Embeddings → Local Embeddings
+
+### Current Status (AFTER FIX)
+
+#### ✅ ACTIVE - Use These
+- `app.knowledge.local_embedding.LocalEmbeddingService` - **USE THIS**
+- `app.knowledge.local_embedding.get_local_embedding_service()` - **USE THIS**
+- All document ingestion uses local embeddings
+- All retrieval uses local embeddings
+
+#### ⚠️ DEPRECATED - Don't Use for New Code
+- `app.knowledge.embedding.EmbeddingService` - Kept for compatibility only
+- `app.knowledge.embedding.get_embedding_service()` - Don't use
+
+---
+
+## Code Examples
+
+### ✅ CORRECT - Using Local Embeddings
+
+```python
+from app.knowledge.local_embedding import get_local_embedding_service
+
+# Get service
+embedding_service = get_local_embedding_service()
+
+# Generate single embedding
+embedding = await embedding_service.embed_text("legal document text")
+
+# Generate batch embeddings
+embeddings = await embedding_service.embed_batch([
+    "document 1",
+    "document 2",
+    "document 3"
+])
+
+# Generate query embedding
+query_embedding = await embedding_service.embed_query("search query")
+```
+
+### ❌ WRONG - Using Old OpenAI Embeddings
+
+```python
+# DON'T DO THIS - kept for backward compatibility only
+from app.knowledge.embedding import get_embedding_service
+
+embedding_service = get_embedding_service()  # Requires OpenAI API key!
+embedding = await embedding_service.embed_text("...")  # Calls openai.com API
+```
+
+---
+
+## Module Changes
+
+### `app/knowledge/ingestion.py`
+```python
+# BEFORE (WRONG)
+from app.knowledge.embedding import get_embedding_service
+self.embedding_service = get_embedding_service()
+
+# AFTER (CORRECT)
+from app.knowledge.local_embedding import get_local_embedding_service
+self.embedding_service = get_local_embedding_service()
+```
+
+### `app/knowledge/retrieval.py`
+```python
+# BEFORE (WRONG)
+from app.knowledge.embedding import get_embedding_service
+self.embedding_service = get_embedding_service()
+
+# AFTER (CORRECT)
+from app.knowledge.local_embedding import get_local_embedding_service
+self.embedding_service = get_local_embedding_service()
+```
+
+---
+
+## Configuration Changes
+
+### Environment Variables
+
+#### ✅ AFTER FIX
+```bash
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+VECTOR_DB_DIMENSION=384
+# No OPENAI_API_KEY required for embeddings
+```
+
+#### ❌ BEFORE FIX
+```bash
+EMBEDDING_MODEL=text-embedding-3-small
+VECTOR_DB_DIMENSION=1536
+OPENAI_API_KEY=sk-...  # Required
+```
+
+---
+
+## Dependency Changes
+
+### ✅ AFTER FIX - `requirements.txt`
+```
+sentence-transformers>=2.3.1    # Local embeddings
+torch>=2.0.0                    # ML framework
+python-docx>=1.1.0              # DOCX parsing (now required)
+PyPDF2>=3.0.0                   # PDF parsing
+chromadb>=0.4.22                # Vector DB
+```
+
+### ❌ BEFORE FIX
+```
+openai>=1.12.0                  # External API (NOT needed anymore)
+text-embedding-3-small          # External model (NOT needed anymore)
+```
+
+---
+
+## Vector Dimensions
+
+### Local Model: `all-MiniLM-L6-v2`
+- **Dimension:** 384
+- **Size:** ~60MB
+- **Speed:** Fast CPU inference
+- **Quality:** Good for semantic search
+- **Cost:** Free, offline
+
+### OpenAI: `text-embedding-3-small`
+- **Dimension:** 1536
+- **Size:** N/A (cloud-hosted)
+- **Speed:** Fast (network latency)
+- **Quality:** Excellent
+- **Cost:** $0.02 per 1M tokens
+
+### Important: ChromaDB Collections
+Existing collections with 1536 dimensions need migration if you want to reuse:
+```python
+# To handle different dimensions:
+if embedding_dim == 384:  # Local model
+    use_local_collection()
+elif embedding_dim == 1536:  # OpenAI model
+    use_openai_collection()
+```
+
+Fresh ChromaDB collections are auto-created with correct dimensions.
+
+---
+
+## What Changed in Core Services
+
+### Document Ingestion Flow
+```
+BEFORE:
+Upload → Save → Parse → Chunk → OpenAI API (calls openai.com) → ChromaDB → DB
+
+AFTER:
+Upload → Save → Parse → Chunk → Local Embedding (no API) → ChromaDB → DB
+```
+
+### Why This Matters
+- **No API Calls:** Upload works offline
+- **No Rate Limits:** Can process unlimited documents
+- **No Quota:** Never hits OpenAI limits
+- **No Latency:** Embedding runs on server CPU
+- **No Costs:** Free embedding generation
+
+---
+
+## For New Agents/Features
+
+### If You Need Embeddings
+```python
+from app.knowledge.local_embedding import get_local_embedding_service
+
+async def my_feature():
+    svc = get_local_embedding_service()
+    embedding = await svc.embed_text("text to embed")
+    # ... use embedding
+```
+
+### If You Need Retrieval
+```python
+from app.knowledge.retrieval import get_retrieval_service
+
+async def search_documents():
+    svc = get_retrieval_service()
+    results = await svc.retrieve(
+        query="search query",
+        collections=["statutes", "precedents"]
+    )
+    # ... use results
+```
+
+### If You Need ChromaDB
+```python
+from app.knowledge.chroma_service import get_chroma_service
+
+async def store_embeddings():
+    chroma = get_chroma_service()
+    await chroma.insert(
+        collection_name="my_collection",
+        chunks=document_chunks,
+        embeddings=embeddings  # from local_embedding_service
+    )
+```
+
+---
+
+## Backward Compatibility
+
+### Old OpenAI Service Still Works
+The original `EmbeddingService` is kept but:
+- ❌ Not used by document upload
+- ❌ Not used by retrieval
+- ⚠️ Only for backward compatibility if needed
+- 🔴 Will fail without valid OPENAI_API_KEY
+
+### Migration Path
+1. ✅ Already done: Ingestion uses local embeddings
+2. ✅ Already done: Retrieval uses local embeddings
+3. ✅ Already done: Document upload uses local embeddings
+4. ⏳ TODO: Remove old EmbeddingService when no other code uses it
+
+---
+
+## Troubleshooting
+
+### "Module not found: sentence_transformers"
+```bash
+pip install sentence-transformers torch
+```
+
+### "CUDA out of memory"
+The model runs on CPU by default (no GPU needed).
+If you have GPU and want to use it:
+```python
+# Modify local_embedding.py
+self.model = SentenceTransformer(model_name, device='cuda')
+```
+
+### "python-docx not installed"
+```bash
+pip install python-docx
+```
+
+### Model too slow
+First run downloads the model (~60MB). Subsequent runs use cached model.
+Processing speed: ~100-200 texts/second on modern CPU.
+
+### High memory usage
+Model uses ~400MB RAM when loaded (normal for ML models).
+
+---
+
+## Performance Comparison
+
+| Feature | Local | OpenAI |
+|---------|-------|--------|
+| API Calls | 0 | 1 per request |
+| Cost | Free | $0.02/1M tokens |
+| Offline | ✅ Yes | ❌ No |
+| Speed | Fast | Very Fast |
+| Dimension | 384 | 1536 |
+| Setup | Auto | API Key Required |
+| Rate Limit | None | Limited |
+| Quota | Unlimited | Varies |
+
+---
+
+## Summary
+
+### What Stayed the Same
+- Document upload endpoint: `/api/v1/documents/cases/{case_id}/documents`
+- Retrieval service interface
+- ChromaDB storage backend
+- Database schema
+
+### What Changed
+- Embedding source: OpenAI → Local (sentence-transformers)
+- Vector dimension: 1536 → 384
+- API calls during upload: Yes → No
+- Configuration: OpenAI key → Local model name
+
+### What to Do Now
+1. Run `python verify_local_embeddings.py` to confirm setup
+2. Upload DOCX documents through UI
+3. Verify no requests go to api.openai.com
+4. Confirm documents appear in Documents list
+5. Generate analysis (uses Gemini/OpenAI for LLM only)
+
+✅ You're done! Local embedding pipeline is working.
